@@ -10,6 +10,7 @@ const dotenv = require("dotenv");
 const morgan = require("morgan");
 const fs = require("fs");
 const path = require("path");
+const { checkSMTPAccounts } = require("./smtpChecker");
 
 dotenv.config();
 
@@ -32,10 +33,14 @@ app.use(morgan("dev"));
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, "uploads");
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir);
-    }
-    cb(null, uploadDir);
+    fs.mkdir(uploadDir, { recursive: true }, (err) => {
+      if (err) {
+        console.error("Error creating uploads directory:", err);
+        cb(err, uploadDir);
+      } else {
+        cb(null, uploadDir);
+      }
+    });
   },
   filename: (req, file, cb) => {
     cb(null, `${Date.now()}-${file.originalname}`);
@@ -61,6 +66,31 @@ const upload = multer({
 // Routes
 app.get("/", (req, res) => {
   res.send("Mailers Toolz API is running");
+});
+
+app.post("/check-smtp", async (req, res) => {
+  const { filename } = req.body;
+  if (!filename) {
+    return res.status(400).json({ error: "No filename provided." });
+  }
+
+  const filePath = path.join(__dirname, "uploads", filename);
+
+  try {
+    const results = await checkSMTPAccounts(filePath);
+    res.json(results);
+
+    // Emit results through socket
+    io.emit("smtpCheckComplete", results);
+
+    // Delete the file after processing
+    fs.unlink(filePath, (err) => {
+      if (err) console.error("Error deleting file:", err);
+    });
+  } catch (error) {
+    console.error("Error checking SMTP accounts:", error);
+    res.status(500).json({ error: "Error checking SMTP accounts." });
+  }
 });
 
 // File upload route
