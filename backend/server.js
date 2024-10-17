@@ -11,6 +11,7 @@ const morgan = require("morgan");
 const fs = require("fs");
 const path = require("path");
 const { checkSMTPAccounts } = require("./smtpChecker");
+const rateLimit = require("express-rate-limit");
 
 dotenv.config();
 
@@ -28,6 +29,14 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
+
+// Add rate limiting middleware here
+const emailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+});
+
+app.use("/send-email", emailLimiter);
 
 // File upload configuration
 const storage = multer.diskStorage({
@@ -135,6 +144,37 @@ app.post("/upload", upload.single("file"), (req, res) => {
   });
 });
 
+// Add this route to your server.js file
+app.post("/send-email", async (req, res) => {
+  const { senderEmail, senderPassword, recipientEmail, subject, htmlContent } =
+    req.body;
+
+  if (
+    !senderEmail ||
+    !senderPassword ||
+    !recipientEmail ||
+    !subject ||
+    !htmlContent
+  ) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  try {
+    const result = await sendEmail(
+      senderEmail,
+      senderPassword,
+      recipientEmail,
+      subject,
+      htmlContent
+    );
+    res.json({ message: "Email sent successfully", result });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ error: "Failed to send email", details: error.message });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -169,3 +209,38 @@ process.on("SIGTERM", () => {
     console.log("HTTP server closed");
   });
 });
+
+// Function to send email
+async function sendEmail(
+  senderEmail,
+  senderPassword,
+  recipientEmail,
+  subject,
+  htmlContent
+) {
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false, // Use TLS
+    auth: {
+      user: senderEmail,
+      pass: senderPassword,
+    },
+  });
+
+  const mailOptions = {
+    from: senderEmail,
+    to: recipientEmail,
+    subject: subject,
+    html: htmlContent,
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log("Email sent: " + info.response);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error("Error sending email:", error);
+    throw error;
+  }
+}
